@@ -31,7 +31,7 @@ runGame env = do
       case runRWS (runExceptT (game (split (wrap " ") input))) env currentState of  -- runRWS looks like a combination of runReader, runWriter and runState. It takes a global configuration and an initial state as an argument, and returns a data structure containing the log, the result and the final state.
         RWSResult state action written -> do -- the action is of type Eiter String Unit
           case action of
-            Left error -> log error-
+            Left error -> log error
             Right _ -> do
               for_ written log --The for_ action is used to traverse the log (of type List String) and print its entries to the console. - Having run the game logic, which is a pure computation, we need to print any log messages to the screen and show the user a prompt for the next command. 
           RL.setLineHandler (lineHandler state) $ interface --Finally, setLineHandler is used to update the line handler function to use the updated game state, and the prompt is displayed again using the prompt action.
