@@ -1,0 +1,139 @@
+--       -- case canvas of
+--       --       Nothing -> Effect unit
+--       --       Just c -> do      
+--       --             context <- getContext2D c
+--       --             pure context
+
+-- --The below actually works. This is a template for how to combine two different monads.
+-- getCanvasEltArray :: Array (Effect Context2D)
+-- getCanvasEltArray  = do 
+--             index <- 1 .. 9
+--             pure $ getCanvasElt index
+--                 where 
+--                     getCanvasElt ::  Int -> Effect Context2D
+--                     getCanvasElt subsc = unsafePartial do 
+--                         Just canvas <- getCanvasElementById ("canvas"<> show subsc)
+--                         context <- getContext2D canvas
+--                         pure context
+                        
+-- -- The below is an alternative to the getCanvasEltArray method. Doesn't seem to like do notation in foldl or concatMap. I think it's because the do notation has to correpsond to the same monad as the returning type.
+-- -- Use fromJust instead of unsafePartial. The blow doesn't work either as Bind has to return the same Moand. So >>= expects to return an Effect as that is what the first function returns.
+-- getCanvasEltArrayAlt :: Array (Effect Context2D)
+-- getCanvasEltArrayAlt = foldl (\acc n -> getCanvasElementById ("canvas" <> show n) >>= (\x -> snoc acc $ getContext2D $ fromJust x)) [] 1 .. 9
+
+-- getCanvasEltArrayAlt :: Array (Effect Context2D)
+-- getCanvasEltArrayAlt = concatMap (\n -> getCanvasElementById ("canvas" <> show n) >>= (\x -> [getContext2D $ fromJust x])) 1 .. 9
+
+-- getCanvasEltArrayAlt :: Array (Effect Context2D)
+-- getCanvasEltArrayAlt = do
+--             index <- 1..9
+--             let maybeEffectCanvas = getCanvasElementById ("canvas"<> show index)
+--             let swapper :: Int = getContext2D $ fromJust $ maybeEffectCanvas
+--             pure b
+
+-- -- The below type doesn't work. Multiple aruments require some sort of constructor, even if it's just [] or ()
+-- type = Colour Int Int
+
+-- --I've been trying to write a function that iterates over an array and produces another array of Effect Context2D. Now, I have managed to achieve what I want by splitting out the functionality into two separate functions (dealing with the Array and Effect monads separately). However, I wanted to see if I could combine the functions into one. Below is my attempt, but it complains about not being able to match type Effect with Array. I purposefully avoided using do notation as I believe the dos all have to be consistent with the same Monad), so I used the Bind operator >>= instead.
+-- freeNumbers =  filter(\x -> do
+--                         y <- existingNumberArray
+--                         pure $x/= y) $1..8
+
+createInitialState :: Effect GameState
+createInitialState = do
+      pure $ foldl (\acc x -> unsafePartial do
+            randomNumbers <-getTwoRandomNumbers(acc)
+            let Just pair1 = randomNumbers !! 0
+            let Just pair2 = randomNumbers !! 1
+            let panelState = {colour: x, numb1: pair1, numb2: pair2}
+            acc <> [panelState]) [] [Blue, Green, Red, Yellow]
+
+--Here we create the initial State of the game. This will need to go into the call to Play.
+createInitialState :: Effect GameState
+createInitialState = do
+      pure $ foldl (\acc x -> do
+            randomNumbers <- getTwoRandomNumbers(acc)
+            acc <> [panelStateCreator randomNumbers x]) [] [Blue, Green, Red, Yellow]
+            where 
+                  panelStateCreator :: Array Int -> Colour -> PanelState
+                  panelStateCreator [a,b] colour = {colour: colour, numb1: a, numb2: b}
+                  panelStateCreator _ _= {colour: Blue, numb1: 1, numb2: 1} -- this line doesn't matter.
+
+
+--This was/is a headache. We need to create pairs fo random numbers, but without repetition.
+getTwoRandomNumbers:: Array PanelState-> Effect (Array Int)
+getTwoRandomNumbers [] = unsafePartial do 
+            i <- randomInt 1 8
+            jIndex <- randomInt 0 6
+            let Just j = (filter (\x -> x /= i) (1..8) !! jIndex)
+            pure [i,j]
+getTwoRandomNumbers xs = unsafePartial do
+            let lengthOfList = length xs
+            let availableIndices = 8 - (2 * lengthOfList)
+            randomIndexOne <- randomInt 0 availableIndices
+            randomIndexTwo <- randomInt 0 $ availableIndices - 1
+            let existingNumberArray = concatMap (\x -> do
+                                    let x1 = x.numb1
+                                    let x2 = x.numb2
+                                    [x1, x2]) xs
+            let freeNumbers = do
+                        x <- 1..8
+                        y <- existingNumberArray
+                        guard $ x /= y
+                        pure x
+            let Just i = freeNumbers !! randomIndexOne
+            let freeNumbersMinusi = filter (\x -> x /= i) freeNumbers
+            let Just j = freeNumbersMinusi !! randomIndexTwo
+            pure [i, j]
+
+ startListener <- eventListener $ \_ -> do
+        play getCanvasEltArray width height
+        state <- createInitialState
+        logShow state
+        let canvasArray = getCanvasEltArray
+        for_ (0..7) (\i -> do
+          let Just effect = index canvasArray i
+          canvasEffect <- effect
+          colourCanvas canvasEffect (findColour state (i+1)) width height)
+
+
+canvasLogic :: Int -> Number -> Number -> Environment -> GameState -> Effect GameState
+canvasLogic id width height environment gameState = do
+            ctx <-  getCanvasElt $ id -1
+            helper id ctx width height environment gameState
+            where 
+                  helper :: Int -> Context2D -> Number -> Number -> Environment -> GameState -> Effect GameState
+                  helper id1 ctx1 width1 height1 environment1 gameState1 | gameState1.open == false = do
+                                                                        _ <- colourCanvas ctx1 (findColour environment1 id1) width1 height1
+                                                                        pure {open : true, pairs : id1 }
+                                                                  | gameState1.open == true = do
+                                                                        _ <- colourCanvas ctx1 (findColour environment1 id1) width1 height1
+                                                                        if (gameState1.pairs == getPartner environment1 id1)
+                                                                              then 
+                                                                                    pure {open : false, pairs : 0 }
+                                                                        else  do 
+                                                                              launchAff_ do
+                                                                                    delay $ Milliseconds 2000.0
+                                                                              ctx2 <- getCanvasElt $ gameState1.pairs -1
+                                                                              resetCanvas ctx1 ctx2 width1 height1
+                                                                              pure {open : false, pairs : 0 }
+                  helper  _ _ _ _ _ _= throwException $ error "Something went wrong in Canvas Logic"
+
+-- let ctx = getCanvasElt 1
+-- colourCanvas ctx Blue width height
+
+
+canvasCode :: Environment -> ParentNode -> Number -> Number -> Effect Unit
+canvasCode env doc width height = do
+    let RWSResult _ result __ = runRWS (canvasHelper doc width height) env initialState
+    result
+
+canvasHelper :: ParentNode -> Number -> Number -> Game (Effect Unit) -- Push Effect to the outer edges. Make it Effect (Game Unit). Then Change Canvas Logic
+canvasHelper doc width height = unsafePartial do
+    pure $ for_ (1..8) (\i -> do
+                Just canvasNode <- querySelector (QuerySelector ("#canvas" <> show i)) doc             
+                canvasListener <- eventListener $ \_ -> do
+                   pure $ canvasLogic i width height
+
+                addEventListener (EventType "click") canvasListener true (toEventTarget canvasNode)
+              )
